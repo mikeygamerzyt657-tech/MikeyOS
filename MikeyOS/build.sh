@@ -1,4 +1,3 @@
-+
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -17,7 +16,7 @@ for tool in python3 clang ld xorriso qemu-system-x86_64 file; do
 done
 
 # Check required source files
-for f in picture.png src/kernel.c src/linker.ld limine.conf; do
+for f in assets/picture.png src/kernel.c src/linker.ld limine.conf; do
     if [[ ! -f "$f" ]]; then
         echo "ERROR: Missing $f"
         exit 1
