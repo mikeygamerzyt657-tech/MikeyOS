@@ -1,4 +1,4 @@
-
++
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -9,7 +9,7 @@ echo "       MikeyOS Automatic Builder"
 echo "========================================"
 
 # Check required tools
-for tool in python3 gcc ld xorriso qemu-system-x86_64 file; do
+for tool in python3 clang ld xorriso qemu-system-x86_64 file; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "ERROR: Missing tool: $tool"
         exit 1
@@ -90,7 +90,7 @@ ld -r -b binary -o image.o image.rgb
 echo
 echo "[3/7] Compiling x86-64 kernel..."
 
-gcc -std=gnu11 -O2 -Wall -Wextra \
+clang -std=c11 -O2 -Wall -Wextra \
     -ffreestanding \
     -fno-stack-protector \
     -fno-pic \
