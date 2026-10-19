@@ -2,19 +2,17 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
+
 extern const unsigned char _binary_image_rgb_start[];
 extern const unsigned char _binary_image_rgb_end[];
 
-#define REQUEST_START \
-    0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf, \
-    0x785c6ed015d3e316, 0x181e920a7852b9d9
-
-#define REQUEST_END \
-    0xadc0e0531bb10d03, 0x9572709f31764c62
 #define VGA_ADDRESS 0xB8000
-
+#define VGA_WIDTH   80
+#define VGA_HEIGHT  25
 #define WHITE_ON_BLACK 0x0F
-struct limine_framebuffer {
+
+// Generic Framebuffer Structure
+struct framebuffer {
     void *address;
     uint64_t width, height, pitch;
     uint16_t bpp;
@@ -22,50 +20,12 @@ struct limine_framebuffer {
     uint8_t red_mask_size, red_mask_shift;
     uint8_t green_mask_size, green_mask_shift;
     uint8_t blue_mask_size, blue_mask_shift;
-    uint8_t unused[7];
-    uint64_t edid_size;
-    void *edid;
-    uint64_t mode_count;
-    void *modes;
 };
 
-struct limine_framebuffer_response {
-    uint64_t revision;
-    uint64_t framebuffer_count;
-    struct limine_framebuffer **framebuffers;
-};
-
-struct limine_framebuffer_request {
-    uint64_t id[4];
-    uint64_t revision;
-    struct limine_framebuffer_response *response;
-};
-
-__attribute__((used, section(".limine_requests_start")))
-static volatile uint64_t request_start[] = { REQUEST_START };
-
-__attribute__((used, section(".limine_requests")))
-static volatile uint64_t base_revision[] = {
-    0xf9562b2d5c95a6c8,
-    0x6a7b384944536bdc,
-    3
-};
-
-__attribute__((used, section(".limine_requests")))
-static volatile struct limine_framebuffer_request fb_request = {
-    .id = {
-        0xc7b1dd30df4c8b88,
-        0x0a82e883a194f07b,
-        0x9d5827dcd881dd75,
-        0xa3148604f6fab11b
-    },
-    .revision = 0,
-    .response = 0
-};
-
-__attribute__((used, section(".limine_requests_end")))
-static volatile uint64_t request_end[] = { REQUEST_END };
-static struct limine_framebuffer *fb;
+static struct framebuffer *fb = NULL;
+static uint16_t *vga_buffer = (uint16_t *)VGA_ADDRESS;
+static int vga_col = 0;
+static int vga_row = 0;
 
 static void stop(void) {
     for (;;) {
@@ -92,8 +52,7 @@ static void put_pixel(int x, int y, uint32_t color) {
     row[x] = color;
 }
 
-static void draw_block(int x, int y, int width, int height,
-                       uint32_t color) {
+static void draw_block(int x, int y, int width, int height, uint32_t color) {
     for (int dy = 0; dy < height; dy++) {
         for (int dx = 0; dx < width; dx++) {
             put_pixel(x + dx, y + dy, color);
@@ -108,45 +67,24 @@ static void clear_screen(uint32_t color) {
         }
     }
 }
-struct limine_terminal;
 
-struct limine_terminal {
-    struct limine_framebuffer *framebuffer;
-    void (*write)(struct limine_terminal *,
-                  const char *, uint64_t);
-    void *write_ctx;
-};
-
-struct limine_terminal_response {
-    uint64_t revision;
-    uint64_t terminal_count;
-    struct limine_terminal **terminals;
-};
-
-struct limine_terminal_request {
-    uint64_t id[2];
-    uint64_t revision;
-    struct limine_terminal_response *response;
-};
-
-__attribute__((used, section(".limine_requests")))
-static volatile struct limine_terminal_request terminal_request = {
-    .id = {
-        0xc8ac59310c2b0844,
-        0xa68d0c7265d38878
-    },
-    .revision = 0,
-    .response = 0
-};
-
-static struct limine_terminal *terminal;
-
+// Basic VGA Text Mode Print Implementation
 static void kprint(const char *s) {
-    if (terminal && terminal->write && s) {
-        uint64_t len = 0;
-        while (s[len])
-            len++;
-        terminal->write(terminal, s, len);
+    if (!s) return;
+    while (*s) {
+        if (*s == '\n') {
+            vga_col = 0;
+            vga_row++;
+        } else {
+            const size_t index = vga_row * VGA_WIDTH + vga_col;
+            vga_buffer[index] = (uint16_t)((WHITE_ON_BLACK << 8) | (unsigned char)*s);
+            vga_col++;
+            if (vga_col >= VGA_WIDTH) {
+                vga_col = 0;
+                vga_row++;
+            }
+        }
+        s++;
     }
 }
 
@@ -191,8 +129,7 @@ static void kprintf(const char *fmt, ...) {
                 v /= 10;
             } while (v && i < 15);
 
-            while (i)
-            {
+            while (i) {
                 char c[2] = {buf[--i], '\0'};
                 kprint(c);
             }
@@ -227,27 +164,19 @@ static void kprintf(const char *fmt, ...) {
 }
 
 void kernel_main(void) {
-    if (!terminal_request.response ||
-        terminal_request.response->terminal_count == 0)
+    // Note: Initialize your `fb` structure here using your alternative bootloader 
+    // or architecture-specific setup (e.g., Multiboot info structure).
 
-    terminal = terminal_request.response->terminals[0];
+    if (fb) {
+        kprintf("Resolution: %u x %u\n",
+                (unsigned int)fb->width,
+                (unsigned int)fb->height);
 
-    if (!fb_request.response ||
-        fb_request.response->framebuffer_count == 0)
+        draw_block(0, 0, 1920, 1080, rgb(78, 255, 128));
+        draw_block(0, 0, 1920, 800, rgb(0, 255, 247));
+        kprintf("Graphics initialized.\n");
+    }
 
-    fb = fb_request.response->framebuffers[0];
-
-    if (!fb || !fb->address || fb->bpp != 32 ||
-        fb->memory_model != 1)
-
-    kprintf("Resolution: %u x %u\n",
-            (unsigned int)fb->width,
-            (unsigned int)fb->height);
-
-    draw_block(0, 0, 1920, 1080, rgb(78, 255, 128));
-    draw_block(0, 0, 1920, 800, rgb(0, 255, 247));
-
-    kprintf("Graphics initialized.\n");
     kprintf("Hello, MikeyOS!\n");
     kprintf("Kernel started successfully.\n");
     kprintf("Framebuffer initialization follows...\n");

@@ -16,25 +16,17 @@ for tool in python3 clang ld xorriso qemu-system-x86_64 file; do
 done
 
 # Check required source files
-for f in assets/picture.png src/kernel.c src/linker.ld limine.conf; do
+for f in assets/picture.png src/kernel.c src/linker.ld; do
     if [[ ! -f "$f" ]]; then
         echo "ERROR: Missing $f"
         exit 1
     fi
 done
 
-# Check Limine files
-for f in \
-    limine/limine \
-    limine/limine-bios.sys \
-    limine/limine-bios-cd.bin \
-    limine/limine-uefi-cd.bin \
-    limine/BOOTX64.EFI; do
-    if [[ ! -f "$f" ]]; then
-        echo "ERROR: Missing $f"
-        exit 1
-    fi
-done
+echo "setting up bootl"
+
+rm -rf bootl/
+git clone git@git.sr.ht:~pauli1505/bootl
 
 if [[ ! -x limine/limine ]]; then
     echo "ERROR: limine/limine is not executable."
@@ -63,37 +55,33 @@ mkdir -p isodir/boot isodir/EFI/BOOT
 ld -m elf_x86_64 -nostdlib -static \
     -z max-page-size=0x1000 \
     -T src/linker.ld \
-    -o isodir/boot/kernel.elf kernel.o
+    -o isodir/boot/kernel kernel.o
 
-file isodir/boot/kernel.elf
+file isodir/boot/kernel
 
-# Step 5: Prepare Limine boot files
-echo
 echo "[5/7] Preparing boot files..."
 
-cp limine/limine-bios.sys isodir/
-cp limine/limine-bios-cd.bin isodir/
-cp limine/limine-uefi-cd.bin isodir/
-cp limine/BOOTX64.EFI isodir/EFI/BOOT/BOOTX64.EFI
-cp limine.conf isodir/limine.conf
+cp bootl/BOOTX64.EFI isodir/EFI/BOOT/BOOTX64.EFI
 
-# Step 6: Build and install the bootable ISO
-echo
 echo "[6/7] Creating bootable ISO..."
+
+echo "deleting stale/obj"
 
 rm -f mikeyos.iso
 
+dd if=/dev/zero of=isodir/boot/efi.img bs=1M count=4
+
+mkfs.vfat isodir/boot/efi.img
+
+mmd -i isodir/boot/efi.img ::EFI
+mmd -i isodir/boot/efi.img ::EFI/BOOT
+mcopy -i isodir/boot/efi.img bootl/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
+
 xorriso -as mkisofs \
     -R -r -J \
-    -b limine-bios-cd.bin \
-    -no-emul-boot -boot-load-size 4 -boot-info-table \
-    --efi-boot limine-uefi-cd.bin \
-    -efi-boot-part --efi-boot-image \
-    --protective-msdos-label \
+    -e boot/efi.img \
+    -no-emul-boot \
     isodir -o mikeyos.iso
-
-echo "Installing Limine BIOS boot code..."
-./limine/limine bios-install mikeyos.iso
 
 echo "ISO created: $PWD/mikeyos.iso"
 
