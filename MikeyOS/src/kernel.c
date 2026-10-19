@@ -1,6 +1,7 @@
-
 #include <stdint.h>
+#include <stdarg.h>
 #include <stddef.h>
+#include <stdio.h>
 extern const unsigned char _binary_image_rgb_start[];
 extern const unsigned char _binary_image_rgb_end[];
 
@@ -10,7 +11,9 @@ extern const unsigned char _binary_image_rgb_end[];
 
 #define REQUEST_END \
     0xadc0e0531bb10d03, 0x9572709f31764c62
+#define VGA_ADDRESS 0xB8000
 
+#define WHITE_ON_BLACK 0x0F
 struct limine_framebuffer {
     void *address;
     uint64_t width, height, pitch;
@@ -62,7 +65,6 @@ static volatile struct limine_framebuffer_request fb_request = {
 
 __attribute__((used, section(".limine_requests_end")))
 static volatile uint64_t request_end[] = { REQUEST_END };
-
 static struct limine_framebuffer *fb;
 
 static void stop(void) {
@@ -90,22 +92,6 @@ static void put_pixel(int x, int y, uint32_t color) {
     row[x] = color;
 }
 
-static void draw_rgb_image(int x, int y) {
-    const unsigned char *data = _binary_image_rgb_start;
-
-    for (int py = 0; py < 1080; py++) {
-        for (int px = 0; px < 1920; px++) {
-            unsigned int i = (py * 1920 + px) * 3;
-
-            unsigned char r = data[i];
-            unsigned char g = data[i + 1];
-            unsigned char b = data[i + 2];
-
-            put_pixel(x + px, y + py, rgb(r, g, b));
-        }
-    }
-}
-
 static void draw_block(int x, int y, int width, int height,
                        uint32_t color) {
     for (int dy = 0; dy < height; dy++) {
@@ -122,21 +108,149 @@ static void clear_screen(uint32_t color) {
         }
     }
 }
+struct limine_terminal;
+
+struct limine_terminal {
+    struct limine_framebuffer *framebuffer;
+    void (*write)(struct limine_terminal *,
+                  const char *, uint64_t);
+    void *write_ctx;
+};
+
+struct limine_terminal_response {
+    uint64_t revision;
+    uint64_t terminal_count;
+    struct limine_terminal **terminals;
+};
+
+struct limine_terminal_request {
+    uint64_t id[2];
+    uint64_t revision;
+    struct limine_terminal_response *response;
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_terminal_request terminal_request = {
+    .id = {
+        0xc8ac59310c2b0844,
+        0xa68d0c7265d38878
+    },
+    .revision = 0,
+    .response = 0
+};
+
+static struct limine_terminal *terminal;
+
+static void kprint(const char *s) {
+    if (terminal && terminal->write && s) {
+        uint64_t len = 0;
+        while (s[len])
+            len++;
+        terminal->write(terminal, s, len);
+    }
+}
+
+static void kprintf(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+
+    while (*fmt) {
+        if (*fmt != '%') {
+            char c[2] = {*fmt++, '\0'};
+            kprint(c);
+            continue;
+        }
+
+        fmt++;
+
+        if (*fmt == '%') {
+            kprint("%");
+            fmt++;
+        } else if (*fmt == 's') {
+            const char *s = va_arg(args, const char *);
+            kprint(s ? s : "(null)");
+            fmt++;
+        } else if (*fmt == 'c') {
+            char c[2] = {(char)va_arg(args, int), '\0'};
+            kprint(c);
+            fmt++;
+        } else if (*fmt == 'd' || *fmt == 'i') {
+            int n = va_arg(args, int);
+            unsigned int v;
+            if (n < 0) {
+                kprint("-");
+                v = 0u - (unsigned int)n;
+            } else {
+                v = (unsigned int)n;
+            }
+
+            char buf[16];
+            int i = 0;
+            do {
+                buf[i++] = '0' + v % 10;
+                v /= 10;
+            } while (v && i < 15);
+
+            while (i)
+            {
+                char c[2] = {buf[--i], '\0'};
+                kprint(c);
+            }
+            fmt++;
+        } else if (*fmt == 'u' || *fmt == 'x') {
+            unsigned int v = va_arg(args, unsigned int);
+            unsigned int base = (*fmt == 'x') ? 16 : 10;
+            const char *digits = "0123456789abcdef";
+            char buf[16];
+            int i = 0;
+
+            do {
+                buf[i++] = digits[v % base];
+                v /= base;
+            } while (v && i < 15);
+
+            while (i) {
+                char c[2] = {buf[--i], '\0'};
+                kprint(c);
+            }
+            fmt++;
+        } else {
+            kprint("%");
+            if (*fmt) {
+                char c[2] = {*fmt++, '\0'};
+                kprint(c);
+            }
+        }
+    }
+
+    va_end(args);
+}
 
 void kernel_main(void) {
+    if (!terminal_request.response ||
+        terminal_request.response->terminal_count == 0)
+
+    terminal = terminal_request.response->terminals[0];
+
     if (!fb_request.response ||
         fb_request.response->framebuffer_count == 0)
-        stop();
 
     fb = fb_request.response->framebuffers[0];
 
     if (!fb || !fb->address || fb->bpp != 32 ||
         fb->memory_model != 1)
-        stop();
 
-    clear_screen(rgb(12, 12, 28));
+    kprintf("Resolution: %u x %u\n",
+            (unsigned int)fb->width,
+            (unsigned int)fb->height);
 
-    draw_rgb_image(0, 0);
+    draw_block(0, 0, 1920, 1080, rgb(78, 255, 128));
+    draw_block(0, 0, 1920, 800, rgb(0, 255, 247));
+
+    kprintf("Graphics initialized.\n");
+    kprintf("Hello, MikeyOS!\n");
+    kprintf("Kernel started successfully.\n");
+    kprintf("Framebuffer initialization follows...\n");
 
     stop();
 }

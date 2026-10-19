@@ -23,13 +23,6 @@ for f in assets/picture.png src/kernel.c src/linker.ld limine.conf; do
     fi
 done
 
-# Check Pillow
-if ! python3 -c 'from PIL import Image' >/dev/null 2>&1; then
-    echo "ERROR: Pillow is missing."
-    echo "Install it with: sudo apt install python3-pil"
-    exit 1
-fi
-
 # Check Limine files
 for f in \
     limine/limine \
@@ -48,42 +41,6 @@ if [[ ! -x limine/limine ]]; then
     echo "Run: chmod +x limine/limine"
     exit 1
 fi
-
-# Step 1: Convert picture.png to 1920x1080 raw RGB
-echo
-echo "[1/7] Converting picture.png to RGB..."
-
-python3 - <<'PY'
-from PIL import Image
-
-width, height = 1920, 1080
-
-with Image.open("a.png") as source:
-    image = source.convert("RGB")
-    image = image.resize(
-        (width, height),
-        Image.Resampling.LANCZOS
-    )
-    with open("image.rgb", "wb") as output:
-        output.write(image.tobytes())
-
-expected_size = width * height * 3
-actual_size = __import__("os").path.getsize("image.rgb")
-
-if actual_size != expected_size:
-    raise SystemExit(
-        f"ERROR: Expected {expected_size} bytes, got {actual_size}"
-    )
-
-print(f"Image converted: {width}x{height}")
-print(f"Raw RGB size: {actual_size:,} bytes")
-PY
-
-# Step 2: Embed the image as a linkable object
-echo
-echo "[2/7] Embedding RGB image..."
-
-ld -r -b binary -o image.o image.rgb
 
 # Step 3: Compile the 64-bit kernel
 echo
@@ -106,15 +63,9 @@ mkdir -p isodir/boot isodir/EFI/BOOT
 ld -m elf_x86_64 -nostdlib -static \
     -z max-page-size=0x1000 \
     -T src/linker.ld \
-    -o isodir/boot/kernel.elf kernel.o image.o
+    -o isodir/boot/kernel.elf kernel.o
 
 file isodir/boot/kernel.elf
-
-# Verify the image was linked
-if ! nm isodir/boot/kernel.elf | grep -q '_binary_image_rgb_start'; then
-    echo "ERROR: Embedded image symbol is missing."
-    exit 1
-fi
 
 # Step 5: Prepare Limine boot files
 echo
